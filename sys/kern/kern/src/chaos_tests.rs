@@ -107,6 +107,26 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+#[test]
+fn stop_hook_continuation_is_a_user_turn() {
+    let item = crate::chaos::turn::stop_hook_continuation_message(
+        "decide whether this turn has journal shape".to_string(),
+    );
+
+    assert_eq!(
+        item,
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "decide whether this turn has journal shape".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    );
+}
+
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

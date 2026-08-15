@@ -8,6 +8,7 @@ use chaos_dtrace::HookResult;
 use chaos_epoll::OrCancelExt;
 use chaos_ipc::config_types::ModeKind;
 use chaos_ipc::items::TurnItem;
+use chaos_ipc::models::ContentItem;
 use chaos_ipc::models::DeveloperInstructions;
 use chaos_ipc::models::ResponseInputItem;
 use chaos_ipc::models::ResponseItem;
@@ -147,6 +148,20 @@ pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     }
     None
+}
+
+pub(crate) fn stop_hook_continuation_message(prompt: String) -> ResponseItem {
+    // A Stop hook continuation is the next conversational turn, not a new
+    // system/developer instruction. In particular, Gemini's Chat Completions
+    // endpoint rejects a request whose last conversational message is still
+    // the assistant turn that caused the hook to run.
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text: prompt }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 /// Takes a user message as input and runs a loop where, at each sampling
@@ -418,11 +433,11 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_block {
                         if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
                         {
-                            let developer_message: ResponseItem =
-                                DeveloperInstructions::new(continuation_prompt).into();
+                            let continuation_message =
+                                stop_hook_continuation_message(continuation_prompt);
                             sess.record_conversation_items(
                                 &turn_context,
-                                std::slice::from_ref(&developer_message),
+                                std::slice::from_ref(&continuation_message),
                             )
                             .await;
                             stop_hook_active = true;
