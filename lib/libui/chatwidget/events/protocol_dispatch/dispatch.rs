@@ -216,6 +216,10 @@ impl ChatWidget {
                 event.compaction_token_limit,
                 event.context_window
             )),
+            EventMsg::CompactionStarted(event) => self.on_warning(format!(
+                "Compaction starting after durable journal sequence {} (window {}).",
+                event.pre_compaction_last_seq, event.window_number
+            )),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,

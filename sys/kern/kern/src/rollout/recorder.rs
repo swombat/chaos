@@ -94,6 +94,11 @@ enum RolloutCmd {
     Flush {
         ack: oneshot::Sender<()>,
     },
+    /// Confirm that all prior journal writes are committed and return journald's
+    /// next sequence number.
+    DurableBoundary {
+        ack: oneshot::Sender<Result<i64, String>>,
+    },
     Shutdown {
         ack: oneshot::Sender<()>,
     },
@@ -508,6 +513,18 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
+    /// Wait for all prior items to reach journald and return its next sequence.
+    pub async fn durable_boundary(&self) -> std::io::Result<i64> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::DurableBoundary { ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue durable boundary: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for durable boundary: {e}")))?
+            .map_err(IoError::other)
+    }
+
     pub async fn get_rollout_history_for_process(
         process_id: ProcessId,
     ) -> std::io::Result<InitialHistory> {
@@ -740,6 +757,23 @@ impl JournalSink {
             }
             if let Err(err) = writer.release_lease().await {
                 warn!("failed to release journald lease: {err}");
+            }
+        }
+    }
+
+    async fn durable_boundary(&mut self) -> Result<i64, String> {
+        match self {
+            Self::Disabled => Err("journald persistence is unavailable".to_string()),
+            Self::Pending(_) => Err("journald persistence is not materialized".to_string()),
+            Self::Active(writer) => {
+                writer.flush_pending_items().await?;
+                if !writer.pending_items.is_empty() {
+                    return Err(
+                        "journald could not commit all pending items within the retry budget"
+                            .to_string(),
+                    );
+                }
+                Ok(writer.next_seq)
             }
         }
     }
@@ -1331,6 +1365,14 @@ async fn rollout_writer(
             RolloutCmd::Flush { ack } => {
                 let _ = ack.send(());
             }
+            RolloutCmd::DurableBoundary { ack } => {
+                let result = if persisted {
+                    journal_sink.durable_boundary().await
+                } else {
+                    Err("rollout is not materialized".to_string())
+                };
+                let _ = ack.send(result);
+            }
             RolloutCmd::Shutdown { ack } => {
                 journal_sink.shutdown().await;
                 let _ = ack.send(());
@@ -1445,7 +1487,20 @@ fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
 
 #[cfg(test)]
 mod picker_preview_tests {
+    use super::JournalSink;
     use super::cleanup_user_message_preview;
+
+    #[tokio::test]
+    async fn disabled_journal_sink_has_no_durable_boundary() {
+        let mut sink = JournalSink::Disabled;
+
+        let error = sink
+            .durable_boundary()
+            .await
+            .expect_err("disabled sink must reject a durability claim");
+
+        assert!(error.contains("unavailable"));
+    }
 
     #[test]
     fn strips_environment_context_and_request_marker() {

@@ -350,6 +350,7 @@ async fn run_event_loop(
                     EventMsg::PlanDelta(_)
                     | EventMsg::Warning(_)
                     | EventMsg::CompactionPending(_)
+                    | EventMsg::CompactionStarted(_)
                     | EventMsg::SessionConfigured(_)
                     | EventMsg::McpStartupUpdate(_)
                     | EventMsg::McpStartupComplete(_)

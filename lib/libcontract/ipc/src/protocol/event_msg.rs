@@ -79,6 +79,7 @@ use super::CollabResumeEndEvent;
 use super::CollabWaitingBeginEvent;
 use super::CollabWaitingEndEvent;
 use super::CompactionPendingEvent;
+use super::CompactionStartedEvent;
 
 /// Event Queue Entry - events from agent
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -124,6 +125,9 @@ pub enum EventMsg {
 
     /// The active context is approaching automatic compaction.
     CompactionPending(CompactionPendingEvent),
+
+    /// The pre-compaction journal boundary is durable and compaction is starting.
+    CompactionStarted(CompactionStartedEvent),
 
     /// Conversation history was rolled back by dropping the last N user turns.
     #[serde(rename = "process_rolled_back")]

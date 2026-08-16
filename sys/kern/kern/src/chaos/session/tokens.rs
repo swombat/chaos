@@ -33,6 +33,14 @@ impl Session {
         )
     }
 
+    pub(crate) async fn hard_context_limit_reached(&self, turn_context: &TurnContext) -> bool {
+        let Some(context_window) = turn_context.model_context_window() else {
+            return false;
+        };
+        let state = self.state.lock().await;
+        state.get_total_token_usage(state.server_reasoning_included()) >= context_window
+    }
+
     /// Measures the current context load against the model's allotments,
     /// honoring the configured scope and the current pressure-window baseline.
     pub(crate) async fn allotment_status(

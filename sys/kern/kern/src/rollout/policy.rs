@@ -59,6 +59,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::TokenCount(_)
         | EventMsg::CompactionPending(_)
+        | EventMsg::CompactionStarted(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
@@ -142,6 +143,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
 mod tests {
     use super::*;
     use chaos_ipc::protocol::CompactionPendingEvent;
+    use chaos_ipc::protocol::CompactionStartedEvent;
     use chaos_ipc::protocol::TurnProgressEvent;
 
     #[test]
@@ -169,6 +171,21 @@ mod tests {
             tokens_until_compaction: 40_000,
             compaction_token_limit: 350_000,
             context_window: 400_000,
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn compaction_started_is_persisted_in_limited_mode() {
+        let event = EventMsg::CompactionStarted(CompactionStartedEvent {
+            window_id: "window-1".to_string(),
+            window_number: 0,
+            pre_compaction_last_seq: 41,
+            checkpoint_present: true,
         });
 
         assert!(should_persist_event_msg(

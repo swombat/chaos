@@ -53,6 +53,19 @@ pub struct CompactionPendingEvent {
     pub context_window: i64,
 }
 
+/// Durable marker that identifies the journal boundary protected before
+/// automatic compaction begins.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct CompactionStartedEvent {
+    pub window_id: String,
+    #[ts(type = "number")]
+    pub window_number: i64,
+    /// Final journal sequence belonging to the pre-compaction history.
+    #[ts(type = "number")]
+    pub pre_compaction_last_seq: i64,
+    pub checkpoint_present: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
     pub turn_id: String,

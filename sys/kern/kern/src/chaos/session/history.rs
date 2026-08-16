@@ -25,6 +25,19 @@ impl Session {
         }
     }
 
+    /// Confirm that all previously queued rollout items are committed in
+    /// journald and return the next sequence number.
+    pub(crate) async fn durable_rollout_boundary(&self) -> std::io::Result<i64> {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(recorder) = recorder else {
+            return Err(std::io::Error::other("rollout recorder is unavailable"));
+        };
+        recorder.durable_boundary().await
+    }
+
     pub(crate) async fn ensure_rollout_materialized(&self) {
         let recorder = {
             let guard = self.services.rollout.lock().await;

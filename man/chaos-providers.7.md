@@ -113,6 +113,12 @@ for that pressure window rather than requesting another one. The checkpoint is
 separate from personal journaling or semantic memory. If checkpoint creation
 fails, Chaos shows a warning and continues with the safety-required compaction.
 
+Before automatic compaction starts, Chaos flushes the canonical journal and
+records a durable `CompactionStarted` marker containing the final
+pre-compaction sequence boundary. A failed durability check pauses
+soft-threshold compaction; only a hard-context-limit emergency may continue
+without the confirmed boundary.
+
 ### xAI (Grok)
 
 Bundled — no config needed. Just export the key:

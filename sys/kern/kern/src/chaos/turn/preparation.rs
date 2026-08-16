@@ -7,6 +7,7 @@ use crate::distill::should_use_remote_distill_task;
 use crate::distill_remote::run_inline_remote_auto_distill_task;
 use crate::error::ChaosErr;
 use crate::error::Result as ChaosResult;
+use crate::protocol::CompactionStartedEvent;
 use tracing::warn;
 
 use super::super::Session;
@@ -128,6 +129,61 @@ pub(super) async fn run_auto_compact(
     } else {
         None
     };
+    let hard_context_limit_reached = sess.hard_context_limit_reached(turn_context).await;
+    let (window_id, window_number) = sess.pressure_window_identity().await;
+    match sess.durable_rollout_boundary().await {
+        Ok(next_seq) => {
+            sess.send_event(
+                turn_context,
+                crate::protocol::EventMsg::CompactionStarted(CompactionStartedEvent {
+                    window_id,
+                    window_number,
+                    pre_compaction_last_seq: next_seq.saturating_sub(1),
+                    checkpoint_present: checkpoint.is_some(),
+                }),
+            )
+            .await;
+            // Make the marker itself durable before provider-specific
+            // compaction can replace active history.
+            if let Err(err) = sess.durable_rollout_boundary().await {
+                if hard_context_limit_reached {
+                    warn!(
+                        error = %err,
+                        "compaction-started marker could not be confirmed at the hard context limit; continuing emergency compaction"
+                    );
+                } else {
+                    return Err(err.into());
+                }
+            }
+        }
+        Err(err) if hard_context_limit_reached => {
+            warn!(
+                error = %err,
+                "pre-compaction durability barrier failed at the hard context limit; continuing emergency compaction"
+            );
+            sess.send_event(
+                turn_context,
+                crate::protocol::EventMsg::Warning(crate::protocol::WarningEvent {
+                    message: format!(
+                        "Could not confirm the pre-compaction journal boundary at the hard context limit: {err}. Continuing emergency compaction."
+                    ),
+                }),
+            )
+            .await;
+        }
+        Err(err) => {
+            sess.send_event(
+                turn_context,
+                crate::protocol::EventMsg::Warning(crate::protocol::WarningEvent {
+                    message: format!(
+                        "Automatic compaction paused because Chaos could not confirm the journal boundary: {err}. Retry after journald recovers."
+                    ),
+                }),
+            )
+            .await;
+            return Err(err.into());
+        }
+    }
     if should_use_remote_distill_task(&turn_context.provider) {
         run_inline_remote_auto_distill_task(
             Arc::clone(sess),

@@ -132,6 +132,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     event.context_window
                 );
             }
+            EventMsg::CompactionStarted(event) => {
+                println!(
+                    "Compaction starting after durable journal sequence {} (window {}).",
+                    event.pre_compaction_last_seq, event.window_number
+                );
+            }
 
             EventMsg::ModelReroute(_) | EventMsg::ParentEffortChanged(_) => {}
             EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {
