@@ -19,11 +19,86 @@ use crate::protocol::WarningEvent;
 use crate::util::backoff;
 use chaos_ipc::items::ContextCompactionItem;
 use chaos_ipc::items::TurnItem;
+use chaos_ipc::models::DeveloperInstructions;
 use chaos_ipc::models::ResponseInputItem;
 use chaos_ipc::models::ResponseItem;
 use chaos_ipc::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+
+const COMPACTION_CHECKPOINT_TOKEN_BUDGET: usize = 8_000;
+
+fn compaction_checkpoint_request(
+    window_id: &str,
+    window_number: i64,
+    initial_context_injection: InitialContextInjection,
+) -> String {
+    let visibility = match initial_context_injection {
+        InitialContextInjection::DoNotInject => {
+            "This checkpoint describes the state being left. It cannot see the incoming user message that triggered pre-turn compaction."
+        }
+        InitialContextInjection::BeforeLastUserMessage => {
+            "This checkpoint is being written during an active turn and should preserve in-flight work."
+        }
+    };
+    format!(
+        "<compaction_checkpoint_request>\n\
+Automatic context compaction is imminent. Write a concise operational checkpoint for your continuing self.\n\
+Pressure window: {window_id} (number {window_number}).\n\
+Visibility: {visibility}\n\n\
+Include:\n\
+- the exact task currently in progress;\n\
+- promises made to the user;\n\
+- incomplete edits, branches, processes, or background jobs;\n\
+- verification already performed and evidence still missing;\n\
+- current plan state and the next executable action;\n\
+- unresolved uncertainties that must not be smoothed into conclusions;\n\
+- any provenance or boundaries the continuing agent must preserve.\n\n\
+Write plain text only. Be precise and operational rather than conversational.\n\
+</compaction_checkpoint_request>"
+    )
+}
+
+fn format_compaction_checkpoint(
+    window_id: &str,
+    window_number: i64,
+    checkpoint_text: &str,
+) -> String {
+    let checkpoint_text = chaos_context::allotment::truncate_text(
+        checkpoint_text,
+        chaos_context::allotment::TruncationPolicy::Tokens(COMPACTION_CHECKPOINT_TOKEN_BUDGET),
+    );
+    format!(
+        "<compaction_checkpoint window_id=\"{window_id}\" window_number=\"{window_number}\">\n\
+{checkpoint_text}\n\
+</compaction_checkpoint>"
+    )
+}
+
+fn compaction_checkpoint_text(item: &ResponseItem) -> Option<&str> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "system" {
+        return None;
+    }
+    content.iter().find_map(|item| match item {
+        chaos_ipc::models::ContentItem::InputText { text }
+            if text.starts_with("<compaction_checkpoint ") =>
+        {
+            Some(text.as_str())
+        }
+        _ => None,
+    })
+}
+
+fn checkpoint_matches_window(item: &ResponseItem, window_id: &str) -> bool {
+    compaction_checkpoint_text(item).is_some_and(|text| {
+        text.starts_with(&format!(
+            "<compaction_checkpoint window_id=\"{window_id}\" "
+        ))
+    })
+}
 
 pub use chaos_context::distill::InitialContextInjection;
 pub use chaos_context::distill::SUMMARIZATION_PROMPT;
@@ -42,6 +117,7 @@ pub(crate) async fn run_inline_auto_distill_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    checkpoint: Option<ResponseItem>,
 ) -> ChaosResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -50,7 +126,14 @@ pub(crate) async fn run_inline_auto_distill_task(
         text_elements: Vec::new(),
     }];
 
-    run_distill_task_inner(sess, turn_context, input, initial_context_injection).await?;
+    run_distill_task_inner(
+        sess,
+        turn_context,
+        input,
+        initial_context_injection,
+        checkpoint,
+    )
+    .await?;
     Ok(())
 }
 
@@ -70,6 +153,7 @@ pub(crate) async fn run_distill_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
+        None,
     )
     .await
 }
@@ -79,6 +163,7 @@ async fn run_distill_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    checkpoint: Option<ResponseItem>,
 ) -> ChaosResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -191,6 +276,7 @@ async fn run_distill_task_inner(
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
+    reinject_compaction_checkpoint(&mut new_history, checkpoint.as_ref());
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -216,6 +302,112 @@ async fn run_distill_task_inner(
     });
     sess.send_event(&turn_context, warning).await;
     Ok(())
+}
+
+pub(crate) async fn create_compaction_checkpoint(
+    sess: &Session,
+    turn_context: &TurnContext,
+    initial_context_injection: InitialContextInjection,
+) -> ChaosResult<ResponseItem> {
+    let (window_id, window_number) = sess.pressure_window_identity().await;
+    let mut history = sess.clone_history().await;
+    if let Some(checkpoint) = history
+        .raw_items()
+        .iter()
+        .rev()
+        .find(|item| checkpoint_matches_window(item, &window_id))
+    {
+        return Ok(checkpoint.clone());
+    }
+    let checkpoint_request =
+        compaction_checkpoint_request(&window_id, window_number, initial_context_injection);
+
+    let checkpoint_input: ResponseInputItem =
+        response_input_item_from_user_input(vec![UserInput::Text {
+            text: checkpoint_request,
+            text_elements: Vec::new(),
+        }]);
+    history.record_items(&[checkpoint_input.into()], turn_context.truncation_policy);
+    let prompt = Prompt {
+        input: history.for_prompt(&turn_context.model_info.input_modalities),
+        base_instructions: sess.get_base_instructions().await,
+        personality: turn_context.personality,
+        ..Default::default()
+    };
+    let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+    let mut client_session = sess.services.model_client.new_session();
+    let output_items = collect_checkpoint_output(
+        sess,
+        turn_context,
+        &mut client_session,
+        turn_metadata_header.as_deref(),
+        &prompt,
+    )
+    .await?;
+    let checkpoint_text = get_last_assistant_message_from_turn(&output_items)
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| {
+            ChaosErr::Stream(
+                "checkpoint response contained no assistant text".into(),
+                None,
+            )
+        })?;
+    let checkpoint = format_compaction_checkpoint(&window_id, window_number, &checkpoint_text);
+    Ok(DeveloperInstructions::new(checkpoint).into())
+}
+
+async fn collect_checkpoint_output(
+    sess: &Session,
+    turn_context: &TurnContext,
+    client_session: &mut ModelClientSession,
+    turn_metadata_header: Option<&str>,
+    prompt: &Prompt,
+) -> ChaosResult<Vec<ResponseItem>> {
+    sess.record_provider_request_started(turn_context).await;
+    let mut stream = client_session
+        .stream(
+            prompt,
+            &turn_context.model_info,
+            &turn_context.session_telemetry,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            turn_context.config.service_tier,
+            turn_metadata_header,
+        )
+        .await?;
+    let mut output_items = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event? {
+            ResponseEvent::OutputItemDone(item) => output_items.push(item),
+            ResponseEvent::ServerReasoningIncluded(included) => {
+                sess.set_server_reasoning_included(included).await;
+            }
+            ResponseEvent::RateLimits(snapshot) => {
+                sess.update_rate_limits(turn_context, snapshot).await;
+            }
+            ResponseEvent::Completed { token_usage, .. } => {
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
+                    .await;
+                return Ok(output_items);
+            }
+            _ => {}
+        }
+    }
+    Err(ChaosErr::Stream(
+        "checkpoint stream closed before response.completed".into(),
+        None,
+    ))
+}
+
+pub(crate) fn reinject_compaction_checkpoint(
+    history: &mut Vec<ResponseItem>,
+    checkpoint: Option<&ResponseItem>,
+) {
+    let Some(checkpoint) = checkpoint else {
+        return;
+    };
+    history.retain(|item| compaction_checkpoint_text(item).is_none());
+    history.push(checkpoint.clone());
 }
 
 async fn drain_to_completed(

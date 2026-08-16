@@ -971,6 +971,7 @@ fn expected_precedence_fixture_config_baseline(fixture: &PrecedenceTestFixture) 
         base_instructions: None,
         minion_instructions: None,
         compact_prompt: None,
+        compaction_checkpoint: false,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),

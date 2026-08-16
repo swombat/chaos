@@ -97,6 +97,22 @@ hard context window. The warning begins when the session enters the reserve
 band between the automatic compaction threshold and the hard context limit. It
 does not itself change or defer compaction.
 
+Users can opt into a bounded plaintext operational checkpoint before automatic
+compaction:
+
+```toml
+compaction_checkpoint = true
+```
+
+When enabled, Chaos asks the active model to record the task in progress,
+promises, incomplete work, verification state, next action, uncertainties, and
+important provenance. The result is capped at 8,000 tokens, persisted as a
+developer-instructions item, and reinjected into both local and remote
+replacement history. If a compaction attempt fails, Chaos reuses the checkpoint
+for that pressure window rather than requesting another one. The checkpoint is
+separate from personal journaling or semantic memory. If checkpoint creation
+fails, Chaos shows a warning and continues with the safety-required compaction.
+
 ### xAI (Grok)
 
 Bundled — no config needed. Just export the key:

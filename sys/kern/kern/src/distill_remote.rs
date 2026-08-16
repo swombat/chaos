@@ -10,6 +10,7 @@ use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::distill::InitialContextInjection;
 use crate::distill::insert_initial_context_before_last_real_user_or_summary;
+use crate::distill::reinject_compaction_checkpoint;
 use crate::error::ChaosErr;
 use crate::error::Result as ChaosResult;
 use crate::protocol::CompactedItem;
@@ -40,8 +41,10 @@ pub(crate) async fn run_inline_remote_auto_distill_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    checkpoint: Option<ResponseItem>,
 ) -> ChaosResult<()> {
-    run_remote_distill_task_inner(&sess, &turn_context, initial_context_injection).await?;
+    run_remote_distill_task_inner(&sess, &turn_context, initial_context_injection, checkpoint)
+        .await?;
     Ok(())
 }
 
@@ -56,16 +59,28 @@ pub(crate) async fn run_remote_distill_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_distill_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
+    run_remote_distill_task_inner(
+        &sess,
+        &turn_context,
+        InitialContextInjection::DoNotInject,
+        None,
+    )
+    .await
 }
 
 async fn run_remote_distill_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    checkpoint: Option<ResponseItem>,
 ) -> ChaosResult<()> {
-    if let Err(err) =
-        run_remote_distill_task_inner_impl(sess, turn_context, initial_context_injection).await
+    if let Err(err) = run_remote_distill_task_inner_impl(
+        sess,
+        turn_context,
+        initial_context_injection,
+        checkpoint,
+    )
+    .await
     {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
@@ -80,6 +95,7 @@ async fn run_remote_distill_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    checkpoint: Option<ResponseItem>,
 ) -> ChaosResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -148,6 +164,7 @@ async fn run_remote_distill_task_inner_impl(
         initial_context_injection,
     )
     .await;
+    reinject_compaction_checkpoint(&mut new_history, checkpoint.as_ref());
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);

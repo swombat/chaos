@@ -642,6 +642,7 @@ impl Config {
             personality,
             minion_instructions,
             compact_prompt,
+            compaction_checkpoint: cfg.compaction_checkpoint.unwrap_or(false),
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
             mcp_servers,
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),

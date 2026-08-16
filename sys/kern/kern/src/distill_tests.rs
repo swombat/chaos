@@ -2,6 +2,81 @@ use super::*;
 use chaos_ipc::models::ContentItem;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn checkpoint_request_names_pre_turn_visibility_boundary() {
+    let request =
+        compaction_checkpoint_request("window-1", 2, InitialContextInjection::DoNotInject);
+    assert!(request.contains("Pressure window: window-1 (number 2)"));
+    assert!(request.contains("cannot see the incoming user message"));
+    assert!(request.contains("next executable action"));
+}
+
+#[test]
+fn checkpoint_request_names_mid_turn_visibility() {
+    let request = compaction_checkpoint_request(
+        "window-2",
+        3,
+        InitialContextInjection::BeforeLastUserMessage,
+    );
+    assert!(request.contains("during an active turn"));
+    assert!(request.contains("preserve in-flight work"));
+}
+
+#[test]
+fn formatted_checkpoint_is_identified_and_bounded() {
+    let checkpoint = format_compaction_checkpoint(
+        "window-3",
+        4,
+        &"x".repeat((COMPACTION_CHECKPOINT_TOKEN_BUDGET + 1_000) * 4),
+    );
+
+    assert!(
+        checkpoint
+            .starts_with("<compaction_checkpoint window_id=\"window-3\" window_number=\"4\">\n")
+    );
+    assert!(checkpoint.ends_with("\n</compaction_checkpoint>"));
+    assert!(
+        checkpoint.len() <= COMPACTION_CHECKPOINT_TOKEN_BUDGET * 4 + 200,
+        "checkpoint was {} bytes",
+        checkpoint.len()
+    );
+}
+
+#[test]
+fn checkpoint_reinjection_is_single_and_last() {
+    let checkpoint: ResponseItem = DeveloperInstructions::new(
+        "<compaction_checkpoint window_id=\"window-1\" window_number=\"0\">state</compaction_checkpoint>",
+    )
+    .into();
+    let user = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "summary".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    let mut history = vec![checkpoint.clone(), user.clone(), checkpoint.clone()];
+
+    reinject_compaction_checkpoint(&mut history, Some(&checkpoint));
+
+    assert_eq!(history, vec![user, checkpoint]);
+}
+
+#[test]
+fn checkpoint_window_matching_only_accepts_checkpoint_items() {
+    let checkpoint: ResponseItem = DeveloperInstructions::new(
+        "<compaction_checkpoint window_id=\"window-1\" window_number=\"2\">\nstate\n</compaction_checkpoint>",
+    )
+    .into();
+    let ordinary_system: ResponseItem = DeveloperInstructions::new("ordinary guidance").into();
+
+    assert!(checkpoint_matches_window(&checkpoint, "window-1"));
+    assert!(!checkpoint_matches_window(&checkpoint, "window-2"));
+    assert!(!checkpoint_matches_window(&ordinary_system, "window-1"));
+}
+
 async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,

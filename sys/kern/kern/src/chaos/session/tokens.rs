@@ -25,6 +25,14 @@ fn compaction_warning_due(
 }
 
 impl Session {
+    pub(crate) async fn pressure_window_identity(&self) -> (String, i64) {
+        let state = self.state.lock().await;
+        (
+            state.pressure.window_id().to_string(),
+            i64::try_from(state.pressure.window_number()).unwrap_or(i64::MAX),
+        )
+    }
+
     /// Measures the current context load against the model's allotments,
     /// honoring the configured scope and the current pressure-window baseline.
     pub(crate) async fn allotment_status(

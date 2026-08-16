@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::distill::InitialContextInjection;
+use crate::distill::create_compaction_checkpoint;
 use crate::distill::run_inline_auto_distill_task;
 use crate::distill::should_use_remote_distill_task;
 use crate::distill_remote::run_inline_remote_auto_distill_task;
@@ -94,11 +95,45 @@ pub(super) async fn run_auto_compact(
     // band available. This call is the last-resort path for resumed sessions,
     // pre-turn compaction, and model switches that arrive already at the limit.
     sess.maybe_emit_compaction_pending(turn_context).await;
+    let checkpoint = if turn_context.config.compaction_checkpoint {
+        match create_compaction_checkpoint(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            initial_context_injection,
+        )
+        .await
+        {
+            Ok(checkpoint) => {
+                sess.record_conversation_items(turn_context, std::slice::from_ref(&checkpoint))
+                    .await;
+                Some(checkpoint)
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "failed to create pre-compaction checkpoint; continuing with compaction"
+                );
+                sess.send_event(
+                    turn_context,
+                    crate::protocol::EventMsg::Warning(crate::protocol::WarningEvent {
+                        message: format!(
+                            "Could not create the pre-compaction operational checkpoint: {err}. Continuing with compaction."
+                        ),
+                    }),
+                )
+                .await;
+                None
+            }
+        }
+    } else {
+        None
+    };
     if should_use_remote_distill_task(&turn_context.provider) {
         run_inline_remote_auto_distill_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            checkpoint,
         )
         .await?;
     } else {
@@ -106,6 +141,7 @@ pub(super) async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            checkpoint,
         )
         .await?;
     }

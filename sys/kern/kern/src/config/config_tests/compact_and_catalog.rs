@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn compaction_checkpoint_defaults_off() -> std::io::Result<()> {
+    let chaos_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        chaos_home.path().to_path_buf(),
+    )?;
+
+    assert!(!config.compaction_checkpoint);
+    Ok(())
+}
+
+#[test]
+fn compaction_checkpoint_can_be_enabled() -> std::io::Result<()> {
+    let chaos_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            compaction_checkpoint: Some(true),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        chaos_home.path().to_path_buf(),
+    )?;
+
+    assert!(config.compaction_checkpoint);
+    Ok(())
+}
+
+#[test]
+fn config_schema_exposes_compaction_checkpoint() {
+    let schema =
+        String::from_utf8(crate::config::schema::config_schema_json().expect("valid schema"))
+            .expect("UTF-8 schema");
+
+    assert!(schema.contains(r#""compaction_checkpoint""#));
+}
+
+#[test]
 fn chatgpt_context_window_defaults_to_catalog() -> std::io::Result<()> {
     let chaos_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(

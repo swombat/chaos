@@ -348,6 +348,10 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Create and reinject a plaintext operational checkpoint before automatic
+    /// context compaction.
+    pub compaction_checkpoint: bool,
+
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -676,6 +680,11 @@ pub struct ConfigToml {
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
+
+    /// Create and reinject a plaintext operational checkpoint before automatic
+    /// context compaction. Defaults to `false`.
+    #[serde(default)]
+    pub compaction_checkpoint: Option<bool>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
