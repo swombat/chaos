@@ -347,6 +347,10 @@ async fn apply_requested_spawn_agent_model_overrides(
             let available_models = chaos_clamp::cached_model_presets();
             let selected = find_spawn_agent_model(&available_models, requested_model)?;
             config.model = Some(selected.model.clone());
+            // Pin the child to the parent's live transport, which may have
+            // been toggled at runtime rather than set in config.
+            config.clamp = true;
+            config.clamp_backend = ClampBackend::ClaudeCode;
             if let Some(reasoning_effort) = requested_reasoning_effort {
                 validate_spawn_agent_reasoning_effort(
                     &selected.model,

@@ -1342,6 +1342,8 @@ async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
     .expect("haiku is advertised by Claude Code and should be accepted");
     assert_eq!(config.model.as_deref(), Some("haiku"));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
+    assert!(config.clamp, "a clamped parent's child must stay clamped");
+    assert_eq!(config.clamp_backend, ClampBackend::ClaudeCode);
 
     let mut config = (*turn.config).clone();
     let err = apply_requested_spawn_agent_model_overrides(

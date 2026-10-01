@@ -10,6 +10,7 @@ use chaos_ipc::protocol::Event;
 use chaos_ipc::protocol::EventMsg;
 use chaos_ipc::protocol::InitialHistory;
 use chaos_ipc::protocol::SessionSource;
+use chaos_ipc::protocol::SubAgentSource;
 use chaos_ipc::protocol::WarningEvent;
 use chaos_mcp_runtime::manager::McpConnectionManager;
 use chaos_pf::NetworkProxyAuditMetadata;
@@ -524,7 +525,13 @@ impl Session {
                 config.clamp
                     && matches!(
                         session_configuration.session_source,
-                        SessionSource::Cli | SessionSource::Exec
+                        SessionSource::Cli
+                            | SessionSource::Exec
+                            // A spawned child of a clamped parent rides the
+                            // same subscription transport; without this it
+                            // silently falls back to the direct API and asks
+                            // for an API key the clamped host doesn't have.
+                            | SessionSource::SubAgent(SubAgentSource::ProcessSpawn { .. })
                     ),
                 config.clamp_settings(),
             ),
