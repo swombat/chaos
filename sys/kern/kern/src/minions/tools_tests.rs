@@ -1314,8 +1314,21 @@ async fn build_agent_resume_config_clears_base_instructions() {
     assert_eq!(config, expected);
 }
 
+/// The clamp model cache is process-global, so every assertion that depends
+/// on its contents lives in this one test: parallel tests writing their own
+/// fixtures would otherwise race each other between write and read.
 #[tokio::test]
-async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
+async fn clamped_claude_spawn_models_and_transport() {
+    chaos_clamp::set_cached_models(json!([
+        {"value": "default", "displayName": "Default"},
+        {"value": "haiku", "displayName": "Haiku", "supportedEffortLevels": ["low", "medium", "high"]},
+        {"value": "sonnet", "displayName": "Sonnet", "supportedEffortLevels": ["low", "medium"]}
+    ]));
+    assert_spawn_validates_models_against_clamp_init_list().await;
+    assert_spawn_transport_follows_live_parent_and_explicit_provider().await;
+}
+
+async fn assert_spawn_validates_models_against_clamp_init_list() {
     use chaos_ipc::config_types::ClampBackend;
 
     let (session, turn) = make_session_and_context().await;
@@ -1324,11 +1337,6 @@ async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
         .model_client
         .set_clamped(true, Some(ClampBackend::ClaudeCode))
         .await;
-    chaos_clamp::set_cached_models(json!([
-        {"value": "default", "displayName": "Default"},
-        {"value": "haiku", "displayName": "Haiku", "supportedEffortLevels": ["low", "medium", "high"]},
-        {"value": "sonnet", "displayName": "Sonnet", "supportedEffortLevels": ["low", "medium"]}
-    ]));
 
     let mut config = (*turn.config).clone();
     apply_requested_spawn_agent_model_overrides(
@@ -1374,16 +1382,11 @@ async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
     assert!(matches!(err, FunctionCallError::RespondToModel(_)));
 }
 
-#[tokio::test]
-async fn spawn_transport_follows_live_parent_and_explicit_provider() {
+async fn assert_spawn_transport_follows_live_parent_and_explicit_provider() {
     use chaos_ipc::config_types::ClampBackend;
 
     let (session, turn) = make_session_and_context().await;
     let client = &session.services.model_client;
-    chaos_clamp::set_cached_models(json!([
-        {"value": "default", "displayName": "Default"},
-        {"value": "haiku", "displayName": "Haiku"}
-    ]));
     let base = |model: Option<&str>, clamp: bool| {
         let mut config = (*turn.config).clone();
         config.model = model.map(str::to_string);
