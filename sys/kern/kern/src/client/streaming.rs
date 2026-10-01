@@ -1219,10 +1219,13 @@ impl ModelClientSession {
                 return;
             };
 
-            // Only override the model when running a Claude model slug.
+            // Only override the model when running a Claude model slug, or a
+            // value Claude Code itself advertised at initialization (the
+            // `haiku` / `sonnet` / `opus` aliases a spawned child may carry).
             // Non-Claude slugs (OpenAI, xAI, …) are not valid in Claude Code;
             // in that case let the subprocess use its MAX-subscription default.
-            if clamp_model_slug.starts_with("claude")
+            if (clamp_model_slug.starts_with("claude")
+                || chaos_clamp::is_cached_model(&clamp_model_slug))
                 && let Err(e) = transport.set_model(&clamp_model_slug).await
             {
                 *guard = None;

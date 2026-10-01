@@ -20,6 +20,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use chaos_ipc::ProcessId;
+use chaos_ipc::config_types::ClampBackend;
 use chaos_ipc::models::BaseInstructions;
 use chaos_ipc::models::ResponseInputItem;
 use chaos_ipc::openai_models::ReasoningEffort;
@@ -336,12 +337,34 @@ async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
+        // A clamped Claude Code session has no API catalog: its models are
+        // whatever the Claude Code subprocess advertised at initialization,
+        // and the child runs on the same subscription through its own clamp
+        // transport. Validate against that list, failing closed as below.
+        if session.services.model_client.is_clamped()
+            && session.services.model_client.clamp_backend() == ClampBackend::ClaudeCode
+        {
+            let available_models = chaos_clamp::cached_model_presets();
+            let selected = find_spawn_agent_model(&available_models, requested_model)?;
+            config.model = Some(selected.model.clone());
+            if let Some(reasoning_effort) = requested_reasoning_effort {
+                validate_spawn_agent_reasoning_effort(
+                    &selected.model,
+                    &selected.supported_reasoning_efforts,
+                    reasoning_effort,
+                )?;
+                config.model_reasoning_effort = Some(reasoning_effort);
+            }
+            return Ok(());
+        }
+
         let available_models = session
             .services
             .models_manager
             .list_models(RefreshStrategy::Offline)
             .await;
-        let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
+        let selected_model_name =
+            find_spawn_agent_model(&available_models, requested_model)?.model.clone();
         let selected_model_info = session
             .services
             .models_manager
@@ -445,14 +468,13 @@ pub(crate) async fn apply_requested_spawn_agent_provider_binding(
     Ok(())
 }
 
-fn find_spawn_agent_model_name(
-    available_models: &[chaos_ipc::openai_models::ModelPreset],
+fn find_spawn_agent_model<'a>(
+    available_models: &'a [chaos_ipc::openai_models::ModelPreset],
     requested_model: &str,
-) -> Result<String, FunctionCallError> {
+) -> Result<&'a chaos_ipc::openai_models::ModelPreset, FunctionCallError> {
     available_models
         .iter()
         .find(|model| model.model == requested_model)
-        .map(|model| model.model.clone())
         .ok_or_else(|| {
             let available = available_models
                 .iter()

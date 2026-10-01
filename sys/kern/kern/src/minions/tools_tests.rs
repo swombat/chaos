@@ -1313,3 +1313,63 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("sandbox policy set");
     assert_eq!(config, expected);
 }
+
+#[tokio::test]
+async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
+    use chaos_ipc::config_types::ClampBackend;
+
+    let (session, turn) = make_session_and_context().await;
+    session
+        .services
+        .model_client
+        .set_clamped(true, Some(ClampBackend::ClaudeCode))
+        .await;
+    chaos_clamp::set_cached_models(json!([
+        {"value": "default", "displayName": "Default"},
+        {"value": "haiku", "displayName": "Haiku", "supportedEffortLevels": ["low", "medium", "high"]},
+        {"value": "sonnet", "displayName": "Sonnet", "supportedEffortLevels": ["low", "medium"]}
+    ]));
+
+    let mut config = (*turn.config).clone();
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        &turn,
+        &mut config,
+        Some("haiku"),
+        Some(ReasoningEffort::Low),
+    )
+    .await
+    .expect("haiku is advertised by Claude Code and should be accepted");
+    assert_eq!(config.model.as_deref(), Some("haiku"));
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
+
+    let mut config = (*turn.config).clone();
+    let err = apply_requested_spawn_agent_model_overrides(
+        &session,
+        &turn,
+        &mut config,
+        Some("gpt-6.1-sol"),
+        None,
+    )
+    .await
+    .expect_err("a model Claude Code did not advertise must fail closed");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected a respond-to-model error");
+    };
+    assert!(
+        message.starts_with("Unknown model `gpt-6.1-sol` for spawn_agent"),
+        "unexpected message: {message}"
+    );
+
+    let mut config = (*turn.config).clone();
+    let err = apply_requested_spawn_agent_model_overrides(
+        &session,
+        &turn,
+        &mut config,
+        Some("sonnet"),
+        Some(ReasoningEffort::High),
+    )
+    .await
+    .expect_err("an effort level Claude Code did not advertise must be rejected");
+    assert!(matches!(err, FunctionCallError::RespondToModel(_)));
+}

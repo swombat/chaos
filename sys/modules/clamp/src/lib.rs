@@ -61,3 +61,108 @@ pub fn set_cached_models(models: serde_json::Value) {
 pub fn cached_models() -> Option<serde_json::Value> {
     CACHED_MODELS.lock().ok().and_then(|g| g.clone())
 }
+
+/// Model presets built from the cached Claude Code init response.
+///
+/// Empty until the first clamped turn has initialized a Claude Code
+/// subprocess in this process.
+pub fn cached_model_presets() -> Vec<chaos_ipc::openai_models::ModelPreset> {
+    cached_models()
+        .map(|models| model_presets_from_init(&models))
+        .unwrap_or_default()
+}
+
+/// Whether `model` is a value Claude Code advertised in its init response
+/// (for example the `haiku` / `sonnet` / `opus` aliases), excluding the
+/// `default` sentinel, which means "keep the subscription default".
+pub fn is_cached_model(model: &str) -> bool {
+    model != "default"
+        && cached_model_presets()
+            .iter()
+            .any(|preset| preset.model == model)
+}
+
+/// Build model presets from the `models` array of a Claude Code init
+/// response. Entries without a string `value` are skipped.
+pub fn model_presets_from_init(
+    models: &serde_json::Value,
+) -> Vec<chaos_ipc::openai_models::ModelPreset> {
+    use chaos_ipc::openai_models::ModelPreset;
+    use chaos_ipc::openai_models::ReasoningEffort;
+    use chaos_ipc::openai_models::ReasoningEffortPreset;
+
+    let Some(models) = models.as_array() else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        .filter_map(|m| {
+            let value = m.get("value").and_then(|v| v.as_str())?;
+            let display = m
+                .get("displayName")
+                .and_then(|v| v.as_str())
+                .unwrap_or(value);
+            let desc = m.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let efforts: Vec<ReasoningEffortPreset> = m
+                .get("supportedEffortLevels")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| {
+                            let s = e.as_str()?;
+                            let effort = match s {
+                                "low" => ReasoningEffort::Low,
+                                "medium" => ReasoningEffort::Medium,
+                                "high" => ReasoningEffort::High,
+                                _ => return None,
+                            };
+                            Some(ReasoningEffortPreset {
+                                effort,
+                                description: s.to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(ModelPreset {
+                id: value.to_string(),
+                model: value.to_string(),
+                model_family: Default::default(),
+                display_name: display.to_string(),
+                description: desc.to_string(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: efforts,
+                supports_personality: false,
+                is_default: value == "default",
+                show_in_picker: true,
+                availability_nux: None,
+                supported_in_api: true,
+                input_modalities: vec![],
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod cached_model_tests {
+    use super::model_presets_from_init;
+
+    #[test]
+    fn presets_come_from_init_values_and_skip_malformed_entries() {
+        let init = serde_json::json!([
+            {"value": "default", "displayName": "Default"},
+            {"value": "haiku", "displayName": "Haiku", "supportedEffortLevels": ["low", "high", "max"]},
+            {"displayName": "no value"}
+        ]);
+        let presets = model_presets_from_init(&init);
+        let values: Vec<&str> = presets.iter().map(|p| p.model.as_str()).collect();
+        assert_eq!(values, vec!["default", "haiku"]);
+        assert!(presets[0].is_default);
+        assert_eq!(presets[1].supported_reasoning_efforts.len(), 2);
+    }
+
+    #[test]
+    fn non_array_init_yields_no_presets() {
+        assert!(model_presets_from_init(&serde_json::json!({"models": 1})).is_empty());
+    }
+}

@@ -23,61 +23,9 @@ impl ChatWidget {
         }
 
         let presets: Vec<ModelPreset> = if crate::theme::is_clamped() {
-            use chaos_ipc::openai_models::ReasoningEffort;
-            use chaos_ipc::openai_models::ReasoningEffortPreset;
-
             // Build presets from the real Claude Code init response.
-            let cached = chaos_clamp::cached_models();
-            if let Some(models_json) = cached.as_ref().and_then(|v| v.as_array()) {
-                models_json
-                    .iter()
-                    .map(|m| {
-                        let value = m.get("value").and_then(|v| v.as_str()).unwrap_or("default");
-                        let display = m
-                            .get("displayName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(value);
-                        let desc = m.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                        let is_default = value == "default";
-                        let efforts: Vec<ReasoningEffortPreset> = m
-                            .get("supportedEffortLevels")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|e| {
-                                        let s = e.as_str()?;
-                                        let effort = match s {
-                                            "low" => ReasoningEffort::Low,
-                                            "medium" => ReasoningEffort::Medium,
-                                            "high" => ReasoningEffort::High,
-                                            _ => return None,
-                                        };
-                                        Some(ReasoningEffortPreset {
-                                            effort,
-                                            description: s.to_string(),
-                                        })
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        ModelPreset {
-                            id: value.to_string(),
-                            model: value.to_string(),
-                            model_family: Default::default(),
-                            display_name: display.to_string(),
-                            description: desc.to_string(),
-                            default_reasoning_effort: ReasoningEffort::Medium,
-                            supported_reasoning_efforts: efforts,
-                            supports_personality: false,
-                            is_default,
-                            show_in_picker: true,
-                            availability_nux: None,
-                            supported_in_api: true,
-                            input_modalities: vec![],
-                        }
-                    })
-                    .collect()
-            } else {
+            let presets = chaos_clamp::cached_model_presets();
+            if presets.is_empty() {
                 // No cached models yet — subprocess hasn't been spawned.
                 self.add_info_message(
                     "Send a message first to initialize the Claude Code subprocess, \
@@ -87,6 +35,7 @@ impl ChatWidget {
                 );
                 return;
             }
+            presets
         } else {
             match self.models_manager.try_list_models() {
                 Ok(models) => models,
