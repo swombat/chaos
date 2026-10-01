@@ -522,17 +522,7 @@ impl Session {
                 config.model_verbosity,
                 true,
                 Self::build_model_client_beta_features_header(config.as_ref()),
-                config.clamp
-                    && matches!(
-                        session_configuration.session_source,
-                        SessionSource::Cli
-                            | SessionSource::Exec
-                            // A spawned child of a clamped parent rides the
-                            // same subscription transport; without this it
-                            // silently falls back to the direct API and asks
-                            // for an API key the clamped host doesn't have.
-                            | SessionSource::SubAgent(SubAgentSource::ProcessSpawn { .. })
-                    ),
+                config.clamp && clamp_eligible_source(&session_configuration.session_source),
                 config.clamp_settings(),
             ),
         };
@@ -735,5 +725,50 @@ impl Session {
         }
 
         Ok(sess)
+    }
+}
+
+/// Session sources that may ride a clamped first-party CLI transport.
+///
+/// A spawned child of a clamped parent rides the same subscription transport;
+/// without it the child silently falls back to the direct API and asks for an
+/// API key the clamped host doesn't have. Review and compaction sub-sessions
+/// stay on the direct path.
+pub(crate) fn clamp_eligible_source(source: &SessionSource) -> bool {
+    matches!(
+        source,
+        SessionSource::Cli
+            | SessionSource::Exec
+            | SessionSource::SubAgent(SubAgentSource::ProcessSpawn { .. })
+    )
+}
+
+#[cfg(test)]
+mod clamp_source_tests {
+    use super::*;
+    use chaos_ipc::ProcessId;
+
+    #[test]
+    fn only_interactive_exec_and_spawned_children_may_clamp() {
+        assert!(clamp_eligible_source(&SessionSource::Cli));
+        assert!(clamp_eligible_source(&SessionSource::Exec));
+        assert!(clamp_eligible_source(&SessionSource::SubAgent(
+            SubAgentSource::ProcessSpawn {
+                parent_process_id: ProcessId::new(),
+                depth: 1,
+                agent_nickname: None,
+                agent_role: None,
+            }
+        )));
+        for source in [
+            SessionSource::SubAgent(SubAgentSource::Review),
+            SessionSource::SubAgent(SubAgentSource::Compact),
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation),
+            SessionSource::Mcp,
+            SessionSource::Api,
+            SessionSource::VSCode,
+        ] {
+            assert!(!clamp_eligible_source(&source), "{source:?} must not clamp");
+        }
     }
 }

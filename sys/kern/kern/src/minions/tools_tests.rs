@@ -1342,8 +1342,6 @@ async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
     .expect("haiku is advertised by Claude Code and should be accepted");
     assert_eq!(config.model.as_deref(), Some("haiku"));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
-    assert!(config.clamp, "a clamped parent's child must stay clamped");
-    assert_eq!(config.clamp_backend, ClampBackend::ClaudeCode);
 
     let mut config = (*turn.config).clone();
     let err = apply_requested_spawn_agent_model_overrides(
@@ -1373,5 +1371,64 @@ async fn clamped_claude_spawn_validates_models_against_clamp_init_list() {
     )
     .await
     .expect_err("an effort level Claude Code did not advertise must be rejected");
+    assert!(matches!(err, FunctionCallError::RespondToModel(_)));
+}
+
+#[tokio::test]
+async fn spawn_transport_follows_live_parent_and_explicit_provider() {
+    use chaos_ipc::config_types::ClampBackend;
+
+    let (session, turn) = make_session_and_context().await;
+    let client = &session.services.model_client;
+    chaos_clamp::set_cached_models(json!([
+        {"value": "default", "displayName": "Default"},
+        {"value": "haiku", "displayName": "Haiku"}
+    ]));
+    let base = |model: Option<&str>, clamp: bool| {
+        let mut config = (*turn.config).clone();
+        config.model = model.map(str::to_string);
+        config.clamp = clamp;
+        config
+    };
+
+    // Parent toggled direct at runtime, persisted config still says clamp:
+    // the child must go direct, with or without a model.
+    client.set_clamped(false, None).await;
+    for model in [None, Some("haiku")] {
+        let mut config = base(model, true);
+        resolve_spawn_agent_transport(&session, &turn, &mut config).expect("direct");
+        assert!(
+            !config.clamp,
+            "stale clamp flag must not survive (model {model:?})"
+        );
+    }
+
+    // Parent toggled clamped at runtime, persisted config says direct: the
+    // child inherits the live transport, with or without a model.
+    client
+        .set_clamped(true, Some(ClampBackend::ClaudeCode))
+        .await;
+    for model in [None, Some("haiku"), Some("claude-opus-5-5")] {
+        let mut config = base(model, false);
+        resolve_spawn_agent_transport(&session, &turn, &mut config).expect("clamped");
+        assert!(
+            config.clamp,
+            "live clamp must be inherited (model {model:?})"
+        );
+        assert_eq!(config.clamp_backend, ClampBackend::ClaudeCode);
+    }
+
+    // Explicit binding to another provider is honoured on that provider's
+    // own transport, never rerouted through the parent's subscription.
+    let mut config = base(Some("gpt-6.1-sol"), true);
+    config.model_provider_id = format!("{}-other", turn.config.model_provider_id);
+    resolve_spawn_agent_transport(&session, &turn, &mut config).expect("direct other");
+    assert!(!config.clamp);
+
+    // Same provider, model Claude Code would not accept (e.g. set by a role):
+    // refuse instead of silently running the subscription default.
+    let mut config = base(Some("gpt-6.1-sol"), true);
+    let err = resolve_spawn_agent_transport(&session, &turn, &mut config)
+        .expect_err("non-Claude model on the Claude Code transport must fail closed");
     assert!(matches!(err, FunctionCallError::RespondToModel(_)));
 }

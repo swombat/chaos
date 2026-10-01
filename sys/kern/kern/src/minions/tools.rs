@@ -347,10 +347,6 @@ async fn apply_requested_spawn_agent_model_overrides(
             let available_models = chaos_clamp::cached_model_presets();
             let selected = find_spawn_agent_model(&available_models, requested_model)?;
             config.model = Some(selected.model.clone());
-            // Pin the child to the parent's live transport, which may have
-            // been toggled at runtime rather than set in config.
-            config.clamp = true;
-            config.clamp_backend = ClampBackend::ClaudeCode;
             if let Some(reasoning_effort) = requested_reasoning_effort {
                 validate_spawn_agent_reasoning_effort(
                     &selected.model,
@@ -367,8 +363,9 @@ async fn apply_requested_spawn_agent_model_overrides(
             .models_manager
             .list_models(RefreshStrategy::Offline)
             .await;
-        let selected_model_name =
-            find_spawn_agent_model(&available_models, requested_model)?.model.clone();
+        let selected_model_name = find_spawn_agent_model(&available_models, requested_model)?
+            .model
+            .clone();
         let selected_model_info = session
             .services
             .models_manager
@@ -400,6 +397,50 @@ async fn apply_requested_spawn_agent_model_overrides(
     }
 
     Ok(())
+}
+
+/// Decide the child's model transport once every role, provider and model
+/// override has been applied.
+///
+/// The answer comes from the parent's *live* model client, not the persisted
+/// config: `/clamp` toggles change the client without touching config, so a
+/// cloned config can say either thing.
+///
+/// - Parent direct: child direct.
+/// - Parent clamped, child bound to a different provider: child direct on that
+///   provider's own transport (an explicit binding is honoured, never
+///   silently rerouted through the parent's subscription).
+/// - Parent clamped, same provider: child clamped on the parent's backend. On
+///   Claude Code the child's model must be one the subprocess accepts;
+///   anything else is refused rather than silently replaced by the
+///   subscription default.
+pub(crate) fn resolve_spawn_agent_transport(
+    session: &Session,
+    turn: &TurnContext,
+    config: &mut Config,
+) -> Result<(), FunctionCallError> {
+    let client = &session.services.model_client;
+    if !client.is_clamped() || config.model_provider_id != turn.config.model_provider_id {
+        config.clamp = false;
+        return Ok(());
+    }
+    let backend = client.clamp_backend();
+    if backend == ClampBackend::ClaudeCode
+        && let Some(model) = config.model.as_deref()
+        && !clamp_claude_code_accepts(model)
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Model `{model}` cannot run on the clamped Claude Code transport. \
+             Choose a Claude model, or bind an explicit model_provider."
+        )));
+    }
+    config.clamp = true;
+    config.clamp_backend = backend;
+    Ok(())
+}
+
+fn clamp_claude_code_accepts(model: &str) -> bool {
+    model == "default" || model.starts_with("claude") || chaos_clamp::is_cached_model(model)
 }
 
 pub(crate) async fn apply_requested_spawn_agent_provider_binding(

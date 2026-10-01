@@ -9,7 +9,7 @@ use super::{
     apply_requested_spawn_agent_provider_binding, apply_spawn_agent_overrides,
     apply_spawn_agent_runtime_overrides, build_agent_spawn_config, collab_spawn_error,
     function_arguments, input_preview, parse_arguments, parse_collab_input, process_spawn_source,
-    tool_output_json_text, tool_output_response_item,
+    resolve_spawn_agent_transport, tool_output_json_text, tool_output_response_item,
 };
 use crate::chaos::{Session, TurnContext};
 use crate::config::Config;
@@ -247,6 +247,7 @@ pub(super) async fn prepare_config(
             .await
             .map_err(FunctionCallError::RespondToModel)?;
     }
+    resolve_spawn_agent_transport(session, turn, &mut config)?;
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
     apply_spawn_agent_overrides(&mut config, child_depth);
     config.mode_policy_override = Some(

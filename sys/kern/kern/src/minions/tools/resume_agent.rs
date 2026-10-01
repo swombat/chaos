@@ -6,8 +6,8 @@ use super::{
     AgentStatus, Arc, CollabResumeBeginEvent, CollabResumeEndEvent, Deserialize, FunctionCallError,
     ProcessId, ResponseInputItem, Serialize, Session, ToolHandler, ToolInvocation, ToolKind,
     ToolOutput, ToolPayload, TurnContext, agent_id, build_agent_resume_config, collab_agent_error,
-    function_arguments, parse_arguments, process_spawn_source, tool_output_json_text,
-    tool_output_response_item,
+    function_arguments, parse_arguments, process_spawn_source, resolve_spawn_agent_transport,
+    tool_output_json_text, tool_output_response_item,
 };
 
 pub(crate) struct Handler;
@@ -119,7 +119,8 @@ async fn try_resume_closed_agent(
     receiver_process_id: ProcessId,
     child_depth: i32,
 ) -> Result<AgentStatus, FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
+    let mut config = build_agent_resume_config(turn.as_ref(), child_depth)?;
+    resolve_spawn_agent_transport(session, turn, &mut config)?;
     let resumed_process_id = session
         .services
         .agent_control
